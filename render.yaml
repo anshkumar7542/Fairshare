@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: fairshare
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run prisma:generate && pnpm run build
+    startCommand: (pnpm run prisma:deploy || pnpm exec prisma db push --skip-generate) && (pnpm run seed || true) && pnpm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_ORIGIN
+        sync: false

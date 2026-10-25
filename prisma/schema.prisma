@@ -1,0 +1,268 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SplitMethod {
+  EQUAL
+  UNEQUAL
+  PERCENTAGE
+  SHARES
+}
+
+enum ImportStatus {
+  PREVIEW
+  IMPORTED
+  PARTIAL
+  FAILED
+}
+
+enum ImportRowStatus {
+  PENDING
+  IMPORTED
+  SKIPPED
+  BLOCKED
+}
+
+enum AnomalySeverity {
+  ERROR
+  WARNING
+  INFO
+}
+
+model User {
+  id             String           @id @default(cuid())
+  name           String
+  email          String           @unique
+  passwordHash   String
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  createdGroups  Group[]          @relation("CreatedGroups")
+  memberships    GroupMembership[]
+  paidExpenses   Expense[]        @relation("ExpensePayer")
+  createdExpenses Expense[]       @relation("ExpenseCreator")
+  expenseSplits  ExpenseSplit[]
+  sentSettlements Settlement[]    @relation("SettlementFrom")
+  receivedSettlements Settlement[] @relation("SettlementTo")
+  createdSettlements Settlement[] @relation("SettlementCreator")
+  chatMessages   ExpenseMessage[]
+  createdImports CsvImportBatch[] @relation("ImportCreator")
+  importDecisions ImportDecision[] @relation("ImportDecisionUser")
+  auditLogs      AuditLog[]       @relation("AuditActor")
+}
+
+model Group {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  createdBy   User          @relation("CreatedGroups", fields: [createdById], references: [id])
+  members     GroupMembership[]
+  expenses    Expense[]
+  settlements Settlement[]
+  imports     CsvImportBatch[]
+  currencyRates CurrencyRate[]
+  auditLogs   AuditLog[]
+}
+
+model GroupMembership {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String
+  joinedAt DateTime?
+  leftAt   DateTime?
+  membershipType String?
+  createdAt DateTime @default(now())
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model Expense {
+  id          String           @id @default(cuid())
+  groupId     String
+  description String
+  amountCents Int
+  originalAmountMinor Int?
+  originalCurrency String       @default("INR")
+  normalizedAmountInrCents Int
+  currencyCode String           @default("INR")
+  exchangeRateId String?
+  paidById    String
+  splitMethod SplitMethod
+  expenseDate DateTime
+  notes       String?
+  createdById String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  group       Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  paidBy      User             @relation("ExpensePayer", fields: [paidById], references: [id])
+  createdBy   User             @relation("ExpenseCreator", fields: [createdById], references: [id])
+  exchangeRate CurrencyRate?    @relation(fields: [exchangeRateId], references: [id])
+  splits      ExpenseSplit[]
+  messages    ExpenseMessage[]
+  importRow   CsvRawRow?
+}
+
+model ExpenseSplit {
+  id              String  @id @default(cuid())
+  expenseId       String
+  userId          String
+  owedCents       Int
+  normalizedOwedInrCents Int?
+  originalOwedMinor Int?
+  originalCurrency String?
+  inputAmountCents Int?
+  inputPercentage Float?
+  inputShares     Int?
+  expense        Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user           User    @relation(fields: [userId], references: [id])
+
+  @@unique([expenseId, userId])
+}
+
+model Settlement {
+  id          String   @id @default(cuid())
+  groupId     String
+  fromUserId  String
+  toUserId    String
+  amountCents Int
+  originalAmountMinor Int?
+  originalCurrency String   @default("INR")
+  normalizedAmountInrCents Int
+  currencyCode String   @default("INR")
+  exchangeRateId String?
+  note        String?
+  settledAt   DateTime
+  createdById String
+  createdAt   DateTime @default(now())
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fromUser    User     @relation("SettlementFrom", fields: [fromUserId], references: [id])
+  toUser      User     @relation("SettlementTo", fields: [toUserId], references: [id])
+  createdBy   User     @relation("SettlementCreator", fields: [createdById], references: [id])
+  exchangeRate CurrencyRate? @relation(fields: [exchangeRateId], references: [id])
+}
+
+model ExpenseMessage {
+  id        String   @id @default(cuid())
+  expenseId String
+  authorId  String
+  message   String
+  createdAt DateTime @default(now())
+  expense   Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id])
+}
+
+model CsvImportBatch {
+  id              String        @id @default(cuid())
+  groupId         String
+  fileName        String
+  originalCsv     String
+  status          ImportStatus  @default(PREVIEW)
+  totalRows       Int           @default(0)
+  importedRows    Int           @default(0)
+  skippedRows     Int           @default(0)
+  blockedRows     Int           @default(0)
+  report          Json?
+  createdById     String
+  createdAt       DateTime      @default(now())
+  completedAt     DateTime?
+  group           Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdBy       User          @relation("ImportCreator", fields: [createdById], references: [id])
+  rows            CsvRawRow[]
+  anomalies       ImportAnomaly[]
+  decisions       ImportDecision[]
+  auditLogs       AuditLog[]
+}
+
+model CsvRawRow {
+  id          String          @id @default(cuid())
+  importId    String
+  rowNumber   Int
+  rawData     Json
+  rawText     String
+  parsedData  Json?
+  status      ImportRowStatus @default(PENDING)
+  finalAction String?
+  expenseId   String?         @unique
+  createdAt   DateTime        @default(now())
+  import      CsvImportBatch  @relation(fields: [importId], references: [id], onDelete: Cascade)
+  expense     Expense?        @relation(fields: [expenseId], references: [id])
+  anomalies   ImportAnomaly[]
+  decisions   ImportDecision[]
+
+  @@unique([importId, rowNumber])
+}
+
+model ImportAnomaly {
+  id                   String          @id @default(cuid())
+  importId             String
+  rowId                String
+  rowNumber            Int
+  originalRowData      Json
+  anomalyType          String
+  severity             AnomalySeverity
+  explanation          String
+  suggestedAction      String
+  finalActionTaken     String?
+  userApprovalRequired Boolean         @default(false)
+  fieldName            String?
+  createdAt            DateTime        @default(now())
+  import               CsvImportBatch  @relation(fields: [importId], references: [id], onDelete: Cascade)
+  row                  CsvRawRow       @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  decisions            ImportDecision[]
+}
+
+model ImportDecision {
+  id          String   @id @default(cuid())
+  importId    String
+  rowId       String
+  anomalyId   String?
+  decision    String
+  rationale   String?
+  decidedById String
+  createdAt   DateTime @default(now())
+  import      CsvImportBatch @relation(fields: [importId], references: [id], onDelete: Cascade)
+  row         CsvRawRow      @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  anomaly     ImportAnomaly? @relation(fields: [anomalyId], references: [id], onDelete: SetNull)
+  decidedBy   User          @relation("ImportDecisionUser", fields: [decidedById], references: [id])
+}
+
+model CurrencyRate {
+  id              String   @id @default(cuid())
+  groupId         String?
+  sourceCurrency  String
+  targetCurrency  String   @default("INR")
+  rateMicros      Int
+  effectiveDate   DateTime
+  source          String?
+  createdAt       DateTime @default(now())
+  group           Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  expenses        Expense[]
+  settlements     Settlement[]
+
+  @@unique([groupId, sourceCurrency, targetCurrency, effectiveDate])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  groupId     String?
+  importId    String?
+  actorId     String?
+  entityType  String
+  entityId    String?
+  action      String
+  before      Json?
+  after       Json?
+  createdAt   DateTime @default(now())
+  group       Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  import      CsvImportBatch? @relation(fields: [importId], references: [id], onDelete: SetNull)
+  actor       User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+}
